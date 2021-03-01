@@ -1,0 +1,280 @@
+buildscript {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+
+    dependencies {
+        classpath group: 'org.springframework.boot', name: 'spring-boot-gradle-plugin', version: '2.1.3.RELEASE'
+        classpath 'com.bmuschko:gradle-docker-plugin:6.6.1'
+    }
+}
+
+plugins {
+    /*
+    Artifact build
+     */
+    id 'com.bmuschko.docker-remote-api' version '6.6.1'
+    id "com.patdouble.awsecr" version "0.6.0"
+    id "com.dorongold.task-tree" version "1.5"
+    id "org.sonarqube" version "2.7"
+}
+
+import com.bmuschko.gradle.docker.tasks.container.DockerCreateContainer
+import com.bmuschko.gradle.docker.tasks.container.DockerInspectContainer
+import com.bmuschko.gradle.docker.tasks.container.DockerRemoveContainer
+import com.bmuschko.gradle.docker.tasks.container.DockerStartContainer
+import com.bmuschko.gradle.docker.tasks.container.DockerStopContainer
+import com.bmuschko.gradle.docker.tasks.container.extras.DockerWaitHealthyContainer
+import com.bmuschko.gradle.docker.tasks.image.*
+
+apply plugin: 'java'
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+apply plugin: 'org.springframework.boot'
+apply plugin: 'io.spring.dependency-management'
+apply plugin: 'maven'
+apply plugin: 'maven-publish'
+
+//apply from: "$rootDir/integration-test.gradle"
+
+group 'com.embl.restapi.personmanagement'
+version '0.0.1-SNAPSHOT'
+
+/*
+Resolving versions, default value specified above
+Versions specified for Jenkins build
+ */
+if (project.hasProperty("branchName")) {
+    def branchName = project.getProperty("branchName")
+    if (branchName == "master") {
+        version = version.replace('-SNAPSHOT', '')
+    } else {
+        version = version + "-" + branchName
+    }
+}
+if (project.hasProperty("buildNumber")) {
+    def buildNumber = project.getProperty("buildNumber")
+    version = version + "-" + buildNumber
+}
+
+sourceCompatibility = 1.8
+
+ext {
+    mainClassName = 'PersonManagementApplication'
+    springVersion = '2.1.3.RELEASE'
+}
+
+springBoot {
+    mainClassName = 'com.embl.restapi.personmanagement.PersonManagementApplication'
+}
+
+bootJar {
+    manifest {
+        attributes 'Start-Class': mainClassName
+    }
+    excludeDevtools = true
+}
+
+repositories {
+    mavenCentral()
+    mavenLocal()
+}
+
+dependencies {
+    compile "org.springframework.boot:spring-boot-starter-web:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-starter-actuator:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-autoconfigure:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-configuration-processor:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-starter-validation:${springVersion}"
+
+    implementation "org.springframework.boot:spring-boot-starter-data-rest:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-starter-data-jpa:${springVersion}"
+    implementation "org.springframework.boot:spring-boot-starter-security:${springVersion}"
+    
+    runtime "com.h2database:h2"
+    implementation "com.fasterxml.jackson.dataformat:jackson-dataformat-xml"
+    implementation "javax.validation:validation-api:2.0.1.Final"
+    
+    compile group: "io.springfox", name: "springfox-swagger2", version: "2.7.0"
+    compile group: "io.springfox", name: "springfox-swagger-ui", version: "2.7.0"
+    compile group: 'org.apache.commons', name: 'commons-lang3', version: '3.11'
+    compile group: 'org.junit.platform', name: 'junit-platform-commons', version: '1.7.0'
+
+	runtime 'org.springframework.boot:spring-boot-starter'
+	runtime 'org.springframework.boot:spring-boot-starter-web'
+	
+    testCompile group: "org.springframework.boot", name: "spring-boot-starter-test", version: "${springVersion}"
+	testCompile group: 'org.junit.platform', name: 'junit-platform-engine', version: '1.7.0'
+
+	testImplementation('org.springframework.security:spring-security-test:4.2.3.RELEASE')
+    testImplementation('org.junit.jupiter:junit-jupiter:5.6.2')
+    testImplementation('org.mockito:mockito-junit-jupiter:2.28.2')
+    testImplementation('org.mockito:mockito-core:2.28.2')
+}
+
+test {
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+}
+
+tasks.withType(Test) {
+    useJUnitPlatform()
+}
+
+jar {
+    manifest {
+        attributes 'Main-Class': bootRun.main
+    }
+    from {
+        configurations.compile.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+
+/*
+Required only for springBoot applications
+https://docs.gradle.org/current/userguide/userguide.pdf
+ */
+configurations {
+    [apiElements, runtimeElements].each {
+        it.outgoing.artifacts.removeIf {
+            it.buildDependencies.getDependencies(null).contains(jar) }
+        it.outgoing.artifact(bootJar)
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+
+    repositories {
+        maven {
+            def releasesRepoUrl = artifactRepoUrl+"/repos/releases"
+            def snapshotsRepoUrl = artifactRepoUrl+"/repos/snapshots"
+            url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
+            credentials(AwsCredentials) {
+                accessKey awsAccessKeyId
+                secretKey awsSecretAccessKey
+            }
+        }
+    }
+}
+
+docker {
+    registryCredentials {
+        url = imageRegistryUrl
+    }
+}
+
+task copyDockerfile(type: Copy) {
+    from 'Dockerfile'
+    into buildDir
+}
+
+task buildImage(type: DockerBuildImage) {
+//    dependsOn build
+    dependsOn copyDockerfile
+
+    inputDir = buildDir
+    buildArgs = ['JAR_PATH':libsDirName]
+
+    images.add(imageRegistryUrl + rootProject.name + ':' + version)
+}
+
+task removeImage(type: DockerRemoveImage) {
+    force.set(true)
+    targetImageId buildImage.getImageId()
+
+    onError {
+        println("Image not found")
+    }
+}
+
+task pushImage(type: DockerPushImage) {
+    dependsOn buildImage
+    images.set(buildImage.images)
+
+    onNext { p ->
+        logger.quiet p.status + ' ' + (p.progress ?: '')
+    }
+
+    finalizedBy removeImage
+}
+
+/*
+integration tests
+ */
+def mySQLPort
+def containerId
+
+task pullImageIT(type: DockerPullImage) {
+    image = imageRegistryUrl + 'embl-database:latest'
+}
+
+task createContainerIT(type: DockerCreateContainer) {
+    dependsOn pullImageIT
+    targetImageId pullImageIT.getImage()
+
+    hostConfig.portBindings = ['3306'] //For MySql
+}
+
+task startContainerIT(type: DockerStartContainer) {
+    dependsOn createContainerIT
+    targetContainerId createContainerIT.getContainerId()
+
+    containerId = createContainerIT.getContainerId()
+}
+
+task inspectIT(type: DockerInspectContainer) {
+    targetContainerId startContainerIT.getContainerId()
+
+    onNext {
+        it.networkSettings.getPorts().getBindings().each { k, v ->
+            def key = "" + k.getPort()
+            if (v) {
+                mySQLPort = v[0].hostPortSpec
+                println "Port ${key} is exposed on host as ${mySQLPort}"
+                System.setProperty("spring.datasource.url", "jdbc:mysql://localhost:${mySQLPort}/embl_person_management")
+                return
+            }
+        }
+    }
+}
+
+task waitContainerIT(type: DockerWaitHealthyContainer) {
+    dependsOn startContainerIT
+
+    targetContainerId startContainerIT.getContainerId()
+    awaitStatusTimeout.set(30)
+
+    finalizedBy inspectIT
+}
+
+task stopContainerIT(type: DockerStopContainer) {
+    targetContainerId startContainerIT.getContainerId()
+}
+
+task removeContainerIT(type: DockerRemoveContainer) {
+    dependsOn stopContainerIT
+
+    targetContainerId startContainerIT.getContainerId()
+    force.set(true)
+}
+
+task removeImageIT(type: DockerRemoveImage) {
+    dependsOn removeContainerIT
+
+    force.set(true)
+    targetImageId pullImageIT.getImage()
+
+    onError {
+        println("Image not found")
+    }
+}
+
+//apply from: "$rootDir/gradle/integration-test.gradle"

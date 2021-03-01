@@ -31,7 +31,12 @@
 	I have implemented swagger to execute all the CURD operation for Person management.
 	
 	Please find the Swagger url below. Kindly open it in Browser.
+	
 	http://localhost:8085/swagger-ui.html
+	
+	Username : embl
+	Password : embl
+
 	Under Person Controller, you will see all the APIs.	
 		1) If we want add more data we can use POST API:- (use one at a time)
 			{

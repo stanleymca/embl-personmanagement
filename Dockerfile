@@ -7,4 +7,4 @@ RUN echo "Environment variable JAVA_OPTS : $JAVA_OPTS || Argumets JAR_PATH : $JA
 
 ADD $JAR_PATH/PersonManagement-0.0.1-SNAPSHOT.jar /opt/PersonManagement-0.0.1-SNAPSHOT.jar
 ENTRYPOINT exec java -Dfile.encoding=UTF-8 -jar /opt/PersonManagement-0.0.1-SNAPSHOT.jar $JAVA_OPTS
-EXPOSE 9085
+EXPOSE 8085

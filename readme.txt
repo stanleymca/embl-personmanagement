@@ -25,7 +25,7 @@
 	Person table will be created automatically once the server is started.
 		
 --Application Detail
-	This application is for contact detail where we can perform CURD operation.
+	This application is for person management (contacts) where we can perform CURD operation.
 	
 --Access API
 	I have implemented swagger to execute all the CURD operation for Person management.
